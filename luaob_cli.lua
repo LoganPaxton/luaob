@@ -1,5 +1,5 @@
--- luaob.lua
--- Usage: lua luaob.lua input.lua output.lua
+-- luaob_cli.lua
+-- Usage: lua luaob_cli.lua input.lua output.lua
 
 assert(arg[1], "Missing input file")
 assert(arg[2], "Missing output file")
@@ -7,9 +7,7 @@ assert(arg[2], "Missing output file")
 local input  = arg[1]
 local output = arg[2]
 
-math.randomseed(os.time())
-
--- Read source (binary safe)
+-- Read source
 local f = assert(io.open(input, "rb"))
 local src = f:read("*a")
 f:close()
@@ -18,35 +16,76 @@ f:close()
 local fn = assert(load(src))
 local dumped = string.dump(fn, true)
 
--- Encrypt
-local KEY = math.random(1, 255)
-local enc = {}
+-- Write bytecode to temp file
+local tmp_plain = os.tmpname()
+local tmp_enc   = os.tmpname()
 
-for i = 1, #dumped do
-    enc[i] = dumped:byte(i) ~ KEY
+do
+    local t = assert(io.open(tmp_plain, "wb"))
+    t:write(dumped)
+    t:close()
 end
 
--- Emit Lua stub (NO DECRYPTION LOGIC)
+-- Generate key + iv
+local key = {}
+local iv  = {}
+
+for i = 1, 32 do key[i] = math.random(0,255) end
+for i = 1, 16 do iv[i]  = math.random(0,255) end
+
+-- Write key/iv as hex
+--[[local function tohex(t)
+    return table.concat(t, "", function(b) return string.format("%02x", b) end)
+end]]--
+
+local key_hex = ""
+for _,b in ipairs(key) do key_hex = key_hex .. string.format("%02x", b) end
+
+local iv_hex = ""
+for _,b in ipairs(iv) do iv_hex = iv_hex .. string.format("%02x", b) end
+
+-- Encrypt using OpenSSL AES-256-CTR
+os.execute(string.format(
+    "openssl enc -aes-256-ctr -K %s -iv %s -nosalt -in %s -out %s",
+    key_hex, iv_hex, tmp_plain, tmp_enc
+))
+
+-- Read encrypted output
+local ef = assert(io.open(tmp_enc, "rb"))
+local enc = { ef:read("*all"):byte(1, -1) }
+ef:close()
+
+os.remove(tmp_plain)
+os.remove(tmp_enc)
+
+-- Emit Lua stub
 local out = assert(io.open(output, "w"))
 
-out:write([[
-local luaob = require("luaob")
+out:write("local luaob = require(\"luaob\")\n\n")
+out:write("luaob.run({\n")
 
-luaob.run({
-    key = ]] .. KEY .. [[,
-    data = {
-]])
+out:write("  key = {")
+for i,b in ipairs(key) do
+    out:write(b)
+    if i < #key then out:write(",") end
+end
+out:write("},\n")
 
-for i = 1, #enc do
-    out:write(enc[i])
+out:write("  iv = {")
+for i,b in ipairs(iv) do
+    out:write(b)
+    if i < #iv then out:write(",") end
+end
+out:write("},\n")
+
+out:write("  data = {")
+for i,b in ipairs(enc) do
+    out:write(b)
     if i < #enc then out:write(",") end
 end
+out:write("}\n")
 
-out:write([[
-    }
-})
-]])
-
+out:write("})\n")
 out:close()
 
-print("[LUAOB] Obfuscated:", input, "->", output)
+print("[LUAOB] AES-CTR obfuscated:", input, "->", output)
