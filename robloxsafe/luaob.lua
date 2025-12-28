@@ -1,4 +1,4 @@
--- luaob.lua (CLI)
+-- luaob.lua (CLI) [ROBLOX SAFE VERSION]
 
 -- -----------------------
 -- Argument handling
